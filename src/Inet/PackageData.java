@@ -1,20 +1,40 @@
 package Inet;
 
-public class PackageData {
-    public static final int REGISTER = 0, BET = 1, HITORSTAND = 2, FINISH = 3;
-    private int type;
-    private String data;
+import Cards.Card;
 
-    public PackageData(int type, String data) {
+import java.io.Serializable;
+
+public class PackageData implements Serializable {
+    private PackageDataType type;
+    private String message;
+    private int money;
+
+    public PackageData(PackageDataType type, int money) {
+        this();
         this.type = type;
-        this.data = data;
+        this.money = money;
     }
 
-    public String getData() {
-        return data;
+    public PackageData(PackageDataType type, String message) {
+        this();
+        this.type = type;
+        this.message = message;
     }
 
-    public int getType() {
-        return type;
+    public PackageData(PackageDataType type) {
+        this();
+        this.type = type;
     }
+
+    public PackageData() {
+        this.type = PackageDataType.Error;
+        this.message = null;
+        this.money = -1;
+    }
+
+    public PackageDataType getType() { return type; }
+
+    public String getMessage() { return message; }
+
+    public int getMoney() { return money; }
 }

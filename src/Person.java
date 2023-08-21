@@ -18,7 +18,6 @@ public class Person {
         this.cards = new ArrayList<>();
     }
 
-
     public ArrayList<Card> getCards() {
         return cards;
     }

@@ -48,7 +48,7 @@ public class Card {
 
     @Override
     public String toString() {
-        return suit.toString() + " " + meaning.toString() + " (" + points + ")";
+        return "(" + points + ") " + suit.toString() + " " + meaning.toString();
     }
 
 }

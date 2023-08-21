@@ -2,37 +2,44 @@ import CardGenerators.CardGenerator;
 import CardGenerators.DefaultGenerator;
 import Cards.Card;
 import GameRules.DefaultRules;
-import Inet.ClientThread;
+import Inet.PackageData;
+import Inet.PackageDataType;
+import StringBuilders.CardsStringBuilder;
+import StringBuilders.StandardBuilder;
 
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class Server {
 
     static Scanner sc = new Scanner(System.in);
 
-    static ArrayList<Person> people;
     static Dealer dealer;
 
     static ArrayList<Card> deck;
 
     static CardGenerator cardGenerator = new DefaultGenerator();
+    CardsStringBuilder strBuilder = new StandardBuilder();
+    DefaultRules rules = new DefaultRules();
 
     static Dictionary<String, Integer> bets;
 
-    static int cardLimit = 22;
+    final static int cardLimit = 22;
+
+    private final ArrayList<ClientThread> al;
+
+    private final int port;
+
+    private String winner;
 
     public Server(int port) {
         al = new ArrayList<>();
-        sdf = new SimpleDateFormat("HH:mm:ss");
         this.port = port;
     }
 
     public void game() {
-        playerRegistration();
         boolean playCondition = false;
         boolean blackjackThing = false;
         do {
@@ -44,22 +51,17 @@ public class Server {
 
             if (!blackjackThing){
                 hitOrStand();
-                dealerGetsCards();
+                //dealerGetsCards();
                 betClash();
-                clearingHands();
+                //clearingHands();
             }
-            playCondition = endingGame();
+            //playCondition = endingGame();
+            playCondition = false;
+
 
         } while (playCondition);
 
     }
-
-    private final ArrayList<ClientThread> al;
-    private final SimpleDateFormat sdf;
-    private final int port;
-    private boolean keepGoing;
-    private int playercount;
-
 
     public static void main(String[] args) {
         int portNumber = 1500;
@@ -88,8 +90,13 @@ public class Server {
         int fillOut = 0;
         try {
             ServerSocket serverSocket = new ServerSocket(port);
+            dealer = new Dealer();
+
+            System.out.println("What's dealer's name?");
+            dealer.setName(sc.next());
 
             System.out.println("How many people are playing (1-4)");
+            int playercount;
             do {
                 playercount = sc.nextInt();
             } while (playercount > 5 || playercount < 1);
@@ -108,37 +115,13 @@ public class Server {
             try{
                 serverSocket.close();
                 for (ClientThread tc : al) {
-                    try {
-                        tc.sInput.close();
-                        tc.sOutput.close();
-                        tc.socket.close();
-                    } catch (IOException ioE) {
-                        ioE.printStackTrace();
-                    }
+                    tc.close();
                 }
             }catch(Exception e){
-                display("Exception closing the server and clients: " + e);
+                showSystemMessage("Exception closing the server and clients: " + e);
             }
         }catch (IOException e){
-            String message = sdf.format(new Date() + " Exception on new ServerSocket: " + e + "\n");
-            display(message);
-        }
-    }
-
-
-    public void playerRegistration() {
-        people = new ArrayList<>(playercount);
-        dealer = new Dealer();
-
-        System.out.println("What's dealer's name?");
-        dealer.setName(sc.next());
-
-        for (int j = 0; j < playercount; j++) {
-            System.out.println("What is player " + (j + 1) + "'s name");
-            Person person = new Person();
-            person.setName(sc.next());
-
-            people.add(person);
+            showSystemMessage("Exception on new ServerSocket: " + e + "\n");
         }
     }
 
@@ -148,13 +131,15 @@ public class Server {
 
     public void makingBets() {
         bets = new Hashtable<>();
-        for (int j = 0; j < people.size(); j++) {
-            String name = people.get(j).getName();
+        PackageData data;
+        for (int j = 0; j < al.size(); j++) {
+            var player = al.get(j);
+            data = new PackageData(PackageDataType.Bet, player.getMoney());
 
-            System.out.println("Player " + name + ", make your bet");
-            int bet = sc.nextInt();
+            player.send(data);
+            int bet = player.<Integer>receive();
 
-            bets.put(name, bet);
+            bets.put(player.getUsername(), bet);
         }
     }
 
@@ -162,10 +147,10 @@ public class Server {
         for (int i = 0; i < 2; i++) {
             dealer.addCard(getCardFromDeck());
         }
-        for (int i = 0; i < people.size(); i++) {
-            Person person = people.get(i);
+        for (int i = 0; i < al.size(); i++) {
+            var client = al.get(i);
             for (int j = 0; j < 2; j++) {
-                person.addCard(getCardFromDeck());
+                client.addCard(getCardFromDeck());
             }
         }
     }
@@ -178,58 +163,84 @@ public class Server {
     }
 
     public void showingCards() {
-        for (int i = 0; i < people.size(); i++) {
-            System.out.println("These are cards of the player " + (people.get(i).getName()));
-            var cards = people.get(i).getCards();
-            for (int j = 0; j < cards.size(); j++) {
-                System.out.println(cards.get(j));
-            }
+        var dealersCard = dealer.getCards().get(1).toString();
+        for (ClientThread client : al) {
+            sendToClientCardsWithPoints(client);
+            sendMessageToClient(client, ("Card of the dealer is " + dealersCard + "\n"));
         }
-        System.out.println("Card of the dealer is " + dealer.getCards().get(1));
+    }
+
+    private void sendToClientCardsWithPoints(ClientThread client) {
+        var str = strBuilder.getCardsString(client.getCards(), "Your cards:\n");
+        var points = rules.cardCounter(client.getCards());
+
+        sendMessageToClient(client, str);
+        sendMessageToClient(client, ("Your points: " + points + "\n"));
+    }
+
+    private static void clientDrawBet(ClientThread client) {
+        bets.remove(client.getUsername());
+    }
+
+    private static void clientWonBet(ClientThread client, int bet) {
+        client.addMoney(bet);
+        dealer.removeMoney(bet);
+        bets.remove(client.getUsername());
+    }
+
+    private static void clientLoseBet(ClientThread client, int bet) {
+        client.removeMoney(bet);
+        dealer.addMoney(bet);
+        bets.remove(client.getUsername());
+    }
+
+    private static void sendMessageToClient(ClientThread client, String message) {
+        client.send(new PackageData(PackageDataType.Message, message));
     }
 
     public boolean checkBlackjack() {
-        DefaultRules rules = new DefaultRules();
         int dealerSum = rules.cardCounter(dealer.getCards());
         boolean condition = false;
 
         if (dealerSum == 21) {
+            for (ClientThread client : al) {
+                int playerSum = rules.cardCounter(client.getCards());
+                int bet = bets.get(client.getUsername());
 
-            for (int i = 0; i < people.size(); i++) {
-                Person person = people.get(i);
-                int playerSm = rules.cardCounter(person.getCards());
-                int bet = bets.get(person.getName());
-
-                if (playerSm != dealerSum) {
-                    System.out.println("Player " + person.getName() + " doesn't have a blackjack! Its a lose!");
-                    person.removeMoney(bet);
-                    dealer.addMoney(bet);
+                if (playerSum != dealerSum) {
+                    sendMessageToClient(client,
+                            "The dealer has blackjack and you don't, that's a loss!\n");
+                    clientLoseBet(client, bet);
                 } else {
-                    System.out.println("Player " + person.getName() + " has blackjack too! Its a push!");
+                    sendMessageToClient(client,
+                            "The dealer has blackjack and you too, that's a push!\n");
+                    clientDrawBet(client);
                 }
-                bets.remove(person.getName());
-                condition = true;
+                sendMessageToClient(client,
+                        "Your money: " + client.getMoney() + "\n");
             }
+
+            condition = true;
         } else {
-            for (int i = 0; i < people.size(); i++) {
-                Person person = people.get(i);
-                int playerSum = rules.cardCounter(person.getCards());
-                int bet = bets.get(person.getName());
+            for (ClientThread client : al) {
+                int playerSum = rules.cardCounter(client.getCards());
+                int bet = bets.get(client.getUsername());
 
                 if (playerSum == 21) {
-                    System.out.println(person.getName() + " has a blackjack! (bonus 1500 cuz lazy to do 3/2)");
-                    person.addMoney(bet + 1500);
-                    dealer.removeMoney(bet + 1500);
-                    bets.remove(person.getName());
-                    person.bustFlag = true;
+                    sendToClientCardsWithPoints(client);
+                    sendMessageToClient(client,
+                            "You have a blackjack!");
+                    clientWonBet(client, (int) (bet * 1.5));
+                    client.bustFlag = true;
                 }
             }
-            condition = false;
         }
+
         return condition;
     }
 
     //universal method
+    /*
     public void showingPlayerCards(Person person) {
         var playerCards = person.getCards();
 
@@ -248,47 +259,41 @@ public class Server {
             System.out.println(card + " ");
         }
     }
+    */
 
     public void hitOrStand() {
-        DefaultRules rules = new DefaultRules();
-        for (int j = 0; j < people.size(); j++) {
-            Person person = people.get(j);
-
-            System.out.println("Player " + person.getName() + "'s turn!");
-            System.out.println("Hit or stand?");
+        for (ClientThread client : al) {
             for (int i = 0; i < cardLimit; i++) {
-                String choice = sc.next(); //may be unnecessary if i use equals()
+
+                sendToClientCardsWithPoints(client);
+                client.send(new PackageData(PackageDataType.HitOrStand));
+
+                var choice = client.<String>receive();
+                var bet = bets.get(client.getUsername());
 
                 if (choice.equalsIgnoreCase("HIT")) {
-                    person.addCard(getCardFromDeck());
-                    int sumOfCards = rules.cardCounter(person.getCards());
+
+                    client.addCard(getCardFromDeck());
+                    int sumOfCards = rules.cardCounter(client.getCards());
+
                     if (sumOfCards > 21) {
-                        System.out.println(person.getName() + " busts!");
-                        showingPlayerCards(person);
-                        person.removeMoney(bets.get(person.getName()));
-                        dealer.addMoney(bets.get(person.getName()));
-                        bets.remove(person.getName());
-                        person.bustFlag = true;
+                        sendToClientCardsWithPoints(client);
+                        sendMessageToClient(client, "You lose!");
+                        clientLoseBet(client, bet);
+                        client.bustFlag = true;
+
                         break;
                     } else {
-                        showingPlayerCards(person);
+                        sendToClientCardsWithPoints(client);
                     }
                 } else if (choice.equalsIgnoreCase("STAND")) {
-                    System.out.println("Player stands!");
-                    showingPlayerCards(person);
+
                     break;
-                } else {
-                    System.out.println("Choose something valid boi (hit/stand are not case sensitive)");
-                    --i;
                 }
-
-
             }
-
         }
-
     }
-
+/*
     public void dealerGetsCards() {
         DefaultRules rules = new DefaultRules();
         var dealerCards = dealer.getCards();
@@ -310,66 +315,51 @@ public class Server {
                 dealer.addCard(getCardFromDeck());
                 System.out.println("Dealer's cards are: " + dealer.getCards());
             }
-
-
         }
     }
-
+*/
     public void betClash() {
         DefaultRules rules = new DefaultRules();
-        var dealerCards = dealer.getCards();
-        var dealerSum = rules.cardCounter(dealerCards);
+        var dealerSum = rules.cardCounter(dealer.getCards());
 
-        for (int i = 0; i < people.size(); i++) {
-            Person person = people.get(i);
-            var playerCards = person.getCards();
-            var playerSum = rules.cardCounter(playerCards);
-            var bet = bets.get(person.getName());
+        for (ClientThread client : al) {
+
+            var playerSum = rules.cardCounter(client.getCards());
+            var bet = bets.get(client.getUsername());
+
             if (dealerSum > 21) { // if dealer busts
-                if (person.bustFlag) {
+                if (client.bustFlag) {
 
                 } else if (playerSum > 21) { // if player busts at the same time
-                    System.out.println("Dealer gets the bet of the player " + person.getName() + " because the player busted");
-                    person.removeMoney(bet);
-                    dealer.addMoney(bet);
-                    bets.remove(person.getName());
+                    //System.out.println("Dealer gets the bet of the player " + client.getName() + " because the player busted");
+                    clientLoseBet(client, bet);
 
                 } else if (playerSum == 21) { // if player has blackjack
-                    System.out.println("Player " + person.getName() + " wins the bet because dealer busted!");
-                    person.addMoney(bet);
-                    dealer.removeMoney(bet);
-                    bets.remove(person.getName()); //unnecessary method
+                    //System.out.println("Player " + client.getName() + " wins the bet because dealer busted!");
+                    clientWonBet(client, bet);
 
                 } else { // if player exists and is an actual functioning member of society playing blackjack (member of society that plays blackjack sure)
-                    System.out.println("Player " + person.getName() + " wins the bet because dealer busted! (bonus)");
-                    person.addMoney(bet); // 3/2 but 2/1
-                    dealer.removeMoney(bet);
-                    bets.remove(person.getName());
+                    //System.out.println("Player " + client.getName() + " wins the bet because dealer busted! (bonus)");
+                    clientWonBet(client, (int)(bet * 2));
                 }
 
             } else {
-                for (int j = 0; j < people.size(); j++) { // if dealer does not bust
-                    if (person.bustFlag) {
+                if (client.bustFlag) {
 
-                    } else if (playerSum < dealerSum) { //player's sum of cards is less than the dealer's
-                        System.out.println("Player " + person.getName() + " busts, dealer takes the bet.");
-                        person.removeMoney(bet);
-                        dealer.addMoney(bet);
-                        bets.remove(person.getName());
-                    } else if (playerSum > dealerSum) { // player's winning
-                        System.out.println("Player " + person.getName() + " wins the bet!");
-                        person.addMoney(bet);
-                        dealer.removeMoney(bet);
-                        bets.remove(person.getName());
-                    } else { // both push (dealer's sum == player's sum)
-                        System.out.println("Both player " + person.getName() + " and dealer push (draw).");
-                        bets.remove(person.getName());
-                        }
-                    }
+                } else if (playerSum < dealerSum) { //player's sum of cards is less than the dealer's
+                    //System.out.println("Player " + client.getName() + " busts, dealer takes the bet.");
+                    clientLoseBet(client, bet);
+                } else if (playerSum > dealerSum) { // player's winning
+                    //System.out.println("Player " + client.getName() + " wins the bet!");
+                    clientWonBet(client, bet);
+                } else { // both push (dealer's sum == player's sum)
+                    //System.out.println("Both player " + client.getName() + " and dealer push (draw).");
+                    clientDrawBet(client);
                 }
             }
         }
-
+    }
+/*
     public void clearingHands () {
         //Clearing hands and showing money
         dealer.clearHand();
@@ -404,6 +394,9 @@ public class Server {
             return false;
         }
     }
-
+*/
+    public static void showSystemMessage(String message) {
+        System.out.println("*** " + message + " ***");
+    }
 }
 
